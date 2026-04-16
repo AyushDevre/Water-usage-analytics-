@@ -37,6 +37,7 @@ streamlit run app.py
 ![Dashboard](image.png)
 ![Water Usage Trend](image-1.png)
 ![Efficiency Analysis using box plot](image-2.png)
+![Ai sustainability solution](image-3.png)
 
 ## Future Scope
 - Real-time IoT data integration
