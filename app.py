@@ -588,26 +588,26 @@ with tab5:
         summary = year_country_df.groupby("industry")["water_usage"].sum().to_dict()
         avg_efficiency = (year_country_df["water_usage"] / year_country_df["production_units"]).mean()
         
-        prompt = f"""
-        You are a water sustainability expert analyzing industrial water consumption data.
-        
-        Analyze the following data for {selected_country} in {selected_year}:
-        
-        Water Usage by Industry:
-        {summary}
-        
-        Average Efficiency: {avg_efficiency:.2f} L per production unit
-        
-        Provide a structured analysis with:
-        
-        1. **Key Problems** (2-3 main issues)
-        2. **Worst Performing Industry** (which industry is consuming most water and why)
-        3. **Actionable Solutions** (5-7 specific, practical recommendations to reduce water usage)
-        4. **Priority Actions** (top 3 immediate steps)
-        5. **Estimated Impact** (potential water savings percentage if recommendations are implemented)
-        
-        Keep the response professional, specific, and actionable. Use bullet points for clarity.
-        """
+        prompt = f"""You MUST respond with ONLY valid JSON. No explanations, no text before or after. 
+
+Analyze the following data for {selected_country} in {selected_year}:
+
+Water Usage by Industry:
+{summary}
+
+Average Efficiency: {avg_efficiency:.2f} L per production unit
+
+Return ONLY this JSON structure (replace values with your analysis):
+{{
+    "top_issue": "Brief description of the most critical water usage issue",
+    "worst_industry": "Industry name with highest consumption",
+    "risk_level": "high|warning|success",
+    "estimated_savings_percent": 25,
+    "actions": [
+        {{"industry": "Industry Name", "action": "Specific action", "reduction_percent": 15}},
+        {{"industry": "Industry Name", "action": "Specific action", "reduction_percent": 10}}
+    ]
+}}"""
         
         try:
             with st.spinner("🔄 Generating AI insights..."):
@@ -618,21 +618,188 @@ with tab5:
                     max_tokens=1000
                 )
                 
+                import json
+                import re
+                response_text = response.choices[0].message.content
+                
+                # Debug: Check if response is empty
+                if not response_text or response_text.strip() == "":
+                    raise ValueError("AI returned empty response")
+                
+                # Remove markdown code blocks if present
+                response_text = re.sub(r'```(?:json)?\s*\n?', '', response_text)
+                response_text = re.sub(r'\n?```', '', response_text)
+                
+                # Extract JSON from response (handles cases where AI adds extra text)
+                json_match = re.search(r'\{[\s\S]*\}', response_text)
+                if json_match:
+                    json_str = json_match.group(0)
+                    try:
+                        ai_data = json.loads(json_str)
+                    except json.JSONDecodeError as e:
+                        st.error(f"JSON Parse Error: {str(e)}")
+                        st.error(f"Attempted to parse: {json_str[:300]}")
+                        raise
+                else:
+                    st.error(f"No JSON found. Response preview: {response_text[:500]}")
+                    raise ValueError("No JSON object found in AI response")
+                
                 st.success("✅ AI Insights Generated Successfully!")
                 st.markdown("---")
-                st.markdown(response.choices[0].message.content)
+                
+                # ========== KPI CARDS ==========
+                st.subheader("📊 Key Performance Indicators")
+                kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
+                
+                with kpi_col1:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                    <h4 style="color: #00D4FF;">🎯 Top Issue</h4>
+                    <p style="font-size: 14px; margin-top: 10px;">{ai_data['top_issue']}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with kpi_col2:
+                    st.markdown(f"""
+                    <div class="metric-card">
+                    <h4 style="color: #00D4FF;">🏭 Worst Industry</h4>
+                    <p style="font-size: 18px; font-weight: bold; margin-top: 10px;">{ai_data['worst_industry']}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with kpi_col3:
+                    # Risk Level Indicator
+                    risk_level = ai_data['risk_level'].lower()
+                    if risk_level == "high":
+                        risk_color = "#FF6B6B"
+                        risk_emoji = "🔴"
+                        risk_label = "HIGH"
+                    elif risk_level == "warning":
+                        risk_color = "#FFD700"
+                        risk_emoji = "🟡"
+                        risk_label = "WARNING"
+                    else:
+                        risk_color = "#51CF66"
+                        risk_emoji = "🟢"
+                        risk_label = "SUCCESS"
+                    
+                    st.markdown(f"""
+                    <div class="metric-card">
+                    <h4 style="color: {risk_color};">{risk_emoji} Risk Level</h4>
+                    <p style="font-size: 18px; font-weight: bold; color: {risk_color}; margin-top: 10px;">{risk_label}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                st.markdown("---")
+                
+                # ========== IMPACT SIMULATION ==========
+                st.subheader("💧 Impact Simulation - Recommended Reductions")
+                
+                # Prepare simulation data
+                simulation_data = []
+                for action in ai_data['actions']:
+                    industry = action['industry']
+                    reduction = action['reduction_percent']
+                    industry_data = year_country_df[year_country_df['industry'] == industry]
+                    
+                    if len(industry_data) > 0:
+                        before = industry_data['water_usage'].sum()
+                        after = before * (1 - reduction / 100)
+                        saved = before - after
+                        
+                        simulation_data.append({
+                            'Industry': industry,
+                            'Action': action['action'],
+                            'Before (L)': before,
+                            'After (L)': after,
+                            'Savings (L)': saved,
+                            'Reduction %': reduction
+                        })
+                
+                sim_df = pd.DataFrame(simulation_data)
+                
+                # Impact Metrics
+                impact_col1, impact_col2, impact_col3, impact_col4 = st.columns(4)
+                
+                total_before = sim_df['Before (L)'].sum()
+                total_after = sim_df['After (L)'].sum()
+                total_saved = sim_df['Savings (L)'].sum()
+                
+                with impact_col1:
+                    st.metric("💧 Total Before", f"{total_before:,.0f} L")
+                
+                with impact_col2:
+                    st.metric("💧 Total After", f"{total_after:,.0f} L")
+                
+                with impact_col3:
+                    st.metric("💚 Total Saved", f"{total_saved:,.0f} L")
+                
+                with impact_col4:
+                    savings_pct = (total_saved / total_before * 100) if total_before > 0 else 0
+                    st.metric("📊 Savings %", f"{savings_pct:.1f}%", delta=f"{ai_data['estimated_savings_percent']}% estimated")
+                
+                st.markdown("---")
+                
+                # Simulation Table
+                st.subheader("📋 Detailed Breakdown")
+                display_sim_df = sim_df.copy()
+                display_sim_df['Before (L)'] = display_sim_df['Before (L)'].apply(lambda x: f"{x:,.0f}")
+                display_sim_df['After (L)'] = display_sim_df['After (L)'].apply(lambda x: f"{x:,.0f}")
+                display_sim_df['Savings (L)'] = display_sim_df['Savings (L)'].apply(lambda x: f"{x:,.0f}")
+                st.dataframe(display_sim_df, use_container_width=True)
+                
+                st.markdown("---")
+                
+                # Before vs After Chart
+                st.subheader("📊 Grouped Bar Chart: Before vs After")
+                
+                chart_data = sim_df[['Industry', 'Before (L)', 'After (L)']].copy()
+                chart_data_melted = chart_data.melt(id_vars='Industry', var_name='Status', value_name='Water Usage (L)')
+                
+                fig_impact = px.bar(
+                    chart_data_melted,
+                    x='Industry',
+                    y='Water Usage (L)',
+                    color='Status',
+                    barmode='group',
+                    color_discrete_map={'Before (L)': '#FF6B6B', 'After (L)': '#51CF66'},
+                    title='Water Usage: Before vs After Recommended Actions'
+                )
+                fig_impact.update_layout(
+                    template="plotly_dark",
+                    plot_bgcolor="#1C2333",
+                    paper_bgcolor="#0F1419",
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig_impact, use_container_width=True)
+                
+                st.markdown("---")
+                
+                # Risk Indicator Box
+                st.subheader("⚠️ Risk Assessment")
+                if risk_level == "high":
+                    st.markdown(f'<div class="error-box">🔴 HIGH RISK: Immediate action required. Water usage patterns indicate critical efficiency concerns.</div>', 
+                               unsafe_allow_html=True)
+                elif risk_level == "warning":
+                    st.markdown(f'<div class="warning-box">🟡 WARNING: Monitor closely and implement recommended actions to prevent critical issues.</div>', 
+                               unsafe_allow_html=True)
+                else:
+                    st.markdown(f'<div class="success-box">🟢 SUCCESS: Current water usage is within acceptable ranges. Continue monitoring.</div>', 
+                               unsafe_allow_html=True)
+                
+                st.markdown("---")
                 
                 # Download insights
-                insights_text = response.choices[0].message.content
+                insights_json = json.dumps(ai_data, indent=2)
                 st.markdown("---")
                 
                 col_download1, col_download2 = st.columns(2)
                 with col_download1:
                     st.download_button(
-                        label="📥 Download Insights as TXT",
-                        data=insights_text,
-                        file_name=f"AI_Insights_{selected_country}_{selected_year}.txt",
-                        mime="text/plain"
+                        label="📥 Download Insights (JSON)",
+                        data=insights_json,
+                        file_name=f"AI_Insights_{selected_country}_{selected_year}.json",
+                        mime="application/json"
                     )
                 
                 with col_download2:
@@ -651,36 +818,125 @@ with tab5:
             total_usage = year_country_df["water_usage"].sum()
             top_pct = (top_usage / total_usage * 100)
             
-            st.markdown(f"""
-            ### 🔍 Key Problems
-            - **{top_industry}** industry is the largest water consumer ({top_pct:.1f}% of total usage)
-            - High water efficiency (>50 L/unit) indicates potential for optimization
-            - Lack of water recycling infrastructure in key industries
+            # Fallback KPI Cards
+            st.subheader("📊 Key Performance Indicators")
+            kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
             
-            ### 🏭 Worst Performing Industry
-            **{top_industry}** - Uses {top_usage:,.0f} L annually
-            - Primary concern: High production volume with inefficient water practices
-            - Opportunity: Implement water recirculation systems
+            with kpi_col1:
+                st.markdown(f"""
+                <div class="metric-card">
+                <h4 style="color: #00D4FF;">🎯 Top Issue</h4>
+                <p style="font-size: 14px; margin-top: 10px;">{top_industry} consumes {top_pct:.1f}% of total water</p>
+                </div>
+                """, unsafe_allow_html=True)
             
-            ### 💡 Actionable Solutions
-            1. **Install Water Recycling Systems** - Reuse treated water in production processes
-            2. **Upgrade Equipment** - Replace old machinery with water-efficient models
-            3. **Implement Monitoring** - Deploy real-time water usage monitoring systems
-            4. **Staff Training** - Train operators on water conservation best practices
-            5. **Process Optimization** - Analyze and redesign production processes for efficiency
-            6. **Leak Detection** - Conduct quarterly pipe maintenance and leak inspections
-            7. **Water Harvesting** - Capture rainwater for non-critical processes
+            with kpi_col2:
+                st.markdown(f"""
+                <div class="metric-card">
+                <h4 style="color: #00D4FF;">🏭 Worst Industry</h4>
+                <p style="font-size: 18px; font-weight: bold; margin-top: 10px;">{top_industry}</p>
+                </div>
+                """, unsafe_allow_html=True)
             
-            ### ⚡ Priority Actions
-            1. Audit current water usage in {top_industry} industry
-            2. Install water meters on all major consumption points
-            3. Launch awareness campaign among production staff
+            with kpi_col3:
+                st.markdown(f"""
+                <div class="metric-card">
+                <h4 style="color: #FFD700;">🟡 Risk Level</h4>
+                <p style="font-size: 18px; font-weight: bold; color: #FFD700; margin-top: 10px;">WARNING</p>
+                </div>
+                """, unsafe_allow_html=True)
             
-            ### 📊 Estimated Impact
-            - **Potential Savings**: 20-30% reduction in water usage
-            - **Timeline**: 6-12 months for full implementation
-            - **ROI**: 2-3 years based on typical water costs
-            """)
+            st.markdown("---")
+            
+            # Fallback Impact Simulation
+            st.subheader("💧 Impact Simulation - Default Reductions")
+            
+            fallback_actions = [
+                {"industry": top_industry, "reduction_percent": 20},
+            ]
+            
+            fallback_sim_data = []
+            for action in fallback_actions:
+                industry = action['industry']
+                reduction = action['reduction_percent']
+                industry_data = year_country_df[year_country_df['industry'] == industry]
+                
+                if len(industry_data) > 0:
+                    before = industry_data['water_usage'].sum()
+                    after = before * (1 - reduction / 100)
+                    saved = before - after
+                    
+                    fallback_sim_data.append({
+                        'Industry': industry,
+                        'Before (L)': before,
+                        'After (L)': after,
+                        'Savings (L)': saved,
+                        'Reduction %': reduction
+                    })
+            
+            fallback_df = pd.DataFrame(fallback_sim_data)
+            
+            # Impact Metrics
+            impact_col1, impact_col2, impact_col3, impact_col4 = st.columns(4)
+            
+            total_before = fallback_df['Before (L)'].sum()
+            total_after = fallback_df['After (L)'].sum()
+            total_saved = fallback_df['Savings (L)'].sum()
+            
+            with impact_col1:
+                st.metric("💧 Total Before", f"{total_before:,.0f} L")
+            
+            with impact_col2:
+                st.metric("💧 Total After", f"{total_after:,.0f} L")
+            
+            with impact_col3:
+                st.metric("💚 Total Saved", f"{total_saved:,.0f} L")
+            
+            with impact_col4:
+                savings_pct = (total_saved / total_before * 100) if total_before > 0 else 0
+                st.metric("📊 Savings %", f"{savings_pct:.1f}%")
+            
+            st.markdown("---")
+            
+            # Fallback Table
+            st.subheader("📋 Detailed Breakdown")
+            display_fallback_df = fallback_df.copy()
+            display_fallback_df['Before (L)'] = display_fallback_df['Before (L)'].apply(lambda x: f"{x:,.0f}")
+            display_fallback_df['After (L)'] = display_fallback_df['After (L)'].apply(lambda x: f"{x:,.0f}")
+            display_fallback_df['Savings (L)'] = display_fallback_df['Savings (L)'].apply(lambda x: f"{x:,.0f}")
+            st.dataframe(display_fallback_df, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Fallback Chart
+            st.subheader("📊 Grouped Bar Chart: Before vs After")
+            
+            fallback_chart_data = fallback_df[['Industry', 'Before (L)', 'After (L)']].copy()
+            fallback_chart_melted = fallback_chart_data.melt(id_vars='Industry', var_name='Status', value_name='Water Usage (L)')
+            
+            fig_fallback = px.bar(
+                fallback_chart_melted,
+                x='Industry',
+                y='Water Usage (L)',
+                color='Status',
+                barmode='group',
+                color_discrete_map={'Before (L)': '#FF6B6B', 'After (L)': '#51CF66'},
+                title='Water Usage: Before vs After Default Actions'
+            )
+            fig_fallback.update_layout(
+                template="plotly_dark",
+                plot_bgcolor="#1C2333",
+                paper_bgcolor="#0F1419",
+                hovermode="x unified"
+            )
+            st.plotly_chart(fig_fallback, use_container_width=True)
+            
+            st.markdown("---")
+            
+            # Fallback Risk Indicator
+            st.subheader("⚠️ Risk Assessment")
+            st.markdown(f'<div class="warning-box">🟡 WARNING: Unable to generate AI insights. Using fallback analysis. Monitor closely and implement recommended actions.</div>', 
+                       unsafe_allow_html=True)
 
 st.markdown("---")
 
